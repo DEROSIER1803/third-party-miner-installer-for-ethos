@@ -1,0 +1,302 @@
+MINER_BRANCH= " $1 "
+CMD= " $0 "
+ACTION= " $2 "
+VERSION= " $3 "
+AUTORISER= " $( chat /opt/ethos/etc/allow.fichier ) "
+
+# Github limite les demandes d'API publiques à 60 par heure, ce script effectue 2 appels par installation avec un maximum de 30 installations de mineurs par heure
+# en ajoutant un utilisateur et un mot de passe github, vous pouvez installer jusqu'à 2 500 mineurs par heure
+# Soit installer le miner-manager et ajouter un utilisateur/passer github.com ici
+# ou ajoutez les deux lignes à un fichier /home/ethos/.gituser et vous pourrez continuer à utiliser la commande source ou via install.
+# GITHUB_USERNAME="Utilisateur Git"
+# GITHUB_PASSWORD="GitPassword"
+
+# Paramètres de mineur par défaut
+TMP_DIR= " /tmp/nouveaumineur "
+GIT_USER_REPO= " cynixx3/tiers-miner-installer-pour-ethos "
+# RELEASE_SHASUM="sha256somme de l'archive"
+# DEPEND="URL URL"
+
+# Réglage de la date pour https
+sudo date -s " $( wget -qSO- --max-redirect=0 google.com 2>&1  | grep Date : | cut -d '  ' -f5-8 ) Z "
+
+# Assembler la connexion de l'utilisateur de l'API
+if [ -f /home/ethos/.gituser ] ;  alors
+  source  <( grep -m2 ^GITHUB_. * = " .* " $ /home/ethos/.gituser )
+Fi
+si [ " $GITHUB_PASSWORD " ] ;  alors 
+  GIT_LOGIN= " --user $GITHUB_USERNAME : $GITHUB_PASSWORD "
+elif [ " $GITHUB_USERNAME " ] ;  alors
+  GIT_LOGIN= " --user $GITHUB_USERNAME "
+autre
+  GIT_LOGIN= " "
+Fi
+
+# Vérifiez la limite de débit de l'API Github
+if [ " $( curl -iks $GIT_LOGIN https://api.github.com/rate_limit | grep -im1 ^x-ratelimit-remaining | cut -d '  ' -f 2 | sed ' s/\r// ' ) "  -le 2 ] ;  alors
+  echo  " Vous avez installé le nombre maximum de rigs autorisé par github. Vous devez attendre $( date -d " @ $( curl -is https://api.github.com/rate_limit | grep ^X-Ratelimit-Reset : | cut -d : -f 2 ) " +%r ) ou ajouter l'authentification GitHub. "
+  sortie 19
+Fi
+
+# Obtenez les fichiers du mineur et configurez l'opt/
+if [[ " $MINER_BRANCH "  =~  " ^ccminer$ " ]] ;  alors 
+  DOWNLOAD_BRANCH= " ccminer-tpruvot " 
+autre
+  DOWNLOAD_BRANCH= " $MINER_BRANCH "
+Fi
+f.PREPMINER (){
+  si [ -z  " $URL_TÉLÉCHARGEMENT "  -a  -n  " ​​$VERSION " ] ;  alors 
+    echo  " Obtenir la version $VERSION de $MINER_BRANCH "
+    DOWNLOAD_URL= $( curl $GIT_LOGIN -s " https://api.github.com/repos/ $GIT_USER_REPO /releases?per_page=100 " \
+    | grep -i " URL_de_téléchargement_du_navigateur.* $DOWNLOAD_BRANCH .*t.*z " \
+    | couper -d ' " ' -f 4 \
+    | grep -vE ' (osx|txt|sha256|armhf) ' \
+    | grep " $VERSION " \
+    | tête -1 )
+    si [ -z  " $URL_TÉLÉCHARGEMENT " ] ;  alors 
+      echo  " AVERTISSEMENT : impossible de trouver la version de $MINER_BRANCH $VERSION . Par défaut, la dernière version "
+    Fi
+  Fi
+ 
+  si [ -z  " $URL_TÉLÉCHARGEMENT " ] ;  alors 
+    echo  " Obtenir la dernière version du mineur "
+    DOWNLOAD_URL= $( curl $GIT_LOGIN -s " https://api.github.com/repos/ $GIT_USER_REPO /releases?per_page=100 " \
+    | grep -i " URL_de_téléchargement_du_navigateur.* $DOWNLOAD_BRANCH .*t.*z " \
+    | couper -d ' " ' -f 4 \
+    | grep -vE ' (osx|txt|sha256|cuda|armhf) ' \
+    |tête -1 )
+  Fi
+  COMPRESSION= $( echo " $DOWNLOAD_URL "  | grep -oP ' t[argxb.]{1,4}z2?$ ' )
+  cas  $COMPRESSION  dans
+    tar.gz|tgz) CT= " -z " ;;
+    tar.xz) CT= " -J " ;;
+    tar.bz2) CT= " -j " ;;
+    * ) CT= " " ;;
+  esac
+
+  if [ -f  " $MINER_BRANCH . $COMPRESSION " ] ;  then rm -rf " /tmp/newminer/ $MINER_BRANCH . $COMPRESSION "  ;  Fi
+  
+  si  ! wget -q " $DOWNLOAD_URL " -O " $MINER_BRANCH . $COMPRESSION "  ;  alors
+    echo  " Échec du téléchargement. Veuillez vérifier votre pare-feu ou votre accès git et réessayer. "
+    sortie 10
+  Fi
+
+  si [ " $RELEASE_SHASUM " ] ; alors
+    echo  " Comparaison du téléchargement avec la somme de contrôle "
+    si  !  echo  " $RELEASE_SHASUM  $MINER_BRANCH . $COMPRESSION "  | sha256sum -c ;  alors
+      echo  " Échec de la vérification des fichiers du mineur, veuillez vérifier votre accès à git puis réessayer ou mettre à jour miner.settings dans le dépôt "
+      sortie 11
+    Fi
+  Fi
+
+  echo  " Déballage du mineur "
+  SOUS-REPERT= " "
+  if tar " $CT " -tf " $MINER_BRANCH . $COMPRESSION "  | grep -qv " ^ $( tar " $CT " -tf " $MINER_BRANCH . $COMPRESSION "  | grep -oP ' ^.*\/ '  | sort | head -n1 ) "  ;  alors
+    SUBDIR= " --directory= $MINER_BRANCH "
+    MINER_ARCHIVE_FOLDER= " $MINER_BRANCH " 
+    mkdir " $MINER_BRANCH "
+    echo  " ATTENTION : tarbomb détecté. Ouverture dans le sous-répertoire, $MINER_BRANCH . "
+  autre
+    MINER_ARCHIVE_FOLDER= $( tar " $CT " -tf " $MINER_BRANCH . $COMPRESSION "  | grep -oP ' ^.*\/ '  | grep -vE ' (kernel|plugin|log.|doc|web|licenses|scripts| lib) '  | sort -u | tail -n1 )  ||  echo  " impossible de trouver le dossier d'archive "
+  Fi
+  si  ! tar " $CT " -xf " $MINER_BRANCH . $COMPRESSION "  " $SOUS-REP "  ;  alors
+    echo  " Impossible d'extraire le package de fichiers. Veuillez vérifier votre accès à git puis réessayer. "
+    sortie 12
+  Fi
+  
+  mkdir -p " $TMP_DIR /opt/miners "
+  rsync -a --delete " $TMP_DIR / $MINER_ARCHIVE_FOLDER / "  " $TMP_DIR /opt/miners/ $MINER_BRANCH "
+  sudo chown -R ethos.ethos " $TMP_DIR " /opt/miners/
+  
+  si [ " $HOOK_PREP_MINER " ] ;  puis  $HOOK_PREP_MINER  ;  Fi
+
+  écho  " Fichiers mineurs temporaires prêts "
+}
+
+# Empêcher le verrouillage du paquet lors de l'installation des dépendances
+f.CHECKDPKG (){
+  DPKGLOCKED= $( lsof /var/lib/dpkg/lock 2> /dev/null | grep -c " /var/lib/dpkg/lock " )
+  WAITCOUNT= " 0 "
+  if [ " $DPKGLOCKED "  -ge  " 1 " ] ;  alors
+    jusqu'à [ " $DPKGLOCKED "  =  " 0 " ] || [ " $WAITCOUNT "  =  " 60 " ] ; faire
+      DPKGLOCKED= $( lsof /var/lib/dpkg/lock 2> /dev/null | grep -c " /var/lib/dpkg/lock " )
+      (( COMPTE D'ATTENTE ++ ))
+    fait
+  Fi
+  if [ " $WAITCOUNT "  -ge  " 120 " ] ;  alors
+    echo  " Délai d'attente dépassé pour effacer le verrou dpkg. "
+    echo  " efface manuellement le verrou dpkg "
+    rm -f /var/lib/dpkg/lock
+  Fi
+}
+
+# Obtenez des fichiers ethos de remplacement qui permettent le fonctionnement du mineur et installent des dépendances spécifiques au mineur
+f.PREPÉTHOS (){
+  if [ " ${VER // . / } "  -ne 133 ] ;  alors
+    echo  " Impossible d'installer en raison de la version actuelle d'ethOS, essayez \" mettre à jour \" à la place pour installer uniquement le mineur ou mettre à jour ethOS. "
+    sortie 14
+  Fi
+  echo  " Télécharger et décompresser les fichiers nécessaires à ethOS "
+  si  ! git clone https://github.com/cynixx3/third-party-miner-installer-for-ethos.git -b " $MINER_BRANCH "  ;  alors
+    echo  " Échec du téléchargement du clone git. Veuillez vérifier votre pare-feu ou votre accès git et réessayer. "
+    sortie 15
+  Fi 
+
+  if [ -f  " $TMP_DIR /third-party-miner-installer-for-ethos/opt/ethos/ $MINER_BRANCH .stub.conf " ] ; alors
+    mkdir -p " $REP_TMP /home/ethos/ "
+    mv " $TMP_DIR /third-party-miner-installer-for-ethos/opt/ethos/ $MINER_BRANCH .stub.conf "  " $TMP_DIR /home/ethos/ "
+    sudo chmod 644 " $TMP_DIR /home/ethos/ $MINER_BRANCH .stub.conf "
+    sudo chown -R ethos.ethos " $TMP_DIR /home/ethos/ $MINER_BRANCH .stub.conf "
+  Fi
+
+  mkdir -p $REP_TMP /opt/ethos
+  rsync -a --delete " $TMP_DIR /third-party-miner-installer-for-ethos/opt/ethos/ "  " $TMP_DIR /opt/ethos "
+  chmod 775 " $TMP_DIR " /opt/ethos/bin/ *  " $TMP_DIR " /opt/ethos/sbin/ * 
+  chmod 744 " $TMP_DIR " /opt/ethos/etc/ *
+  if [ -f  " $TMP_DIR " /opt/ethos/lib/minerprocess.php ] ; alors
+    chmod 644 " $TMP_DIR " /opt/ethos/lib/minerprocess.php
+  Fi
+  if [ -f   " $TMP_DIR " /opt/ethos/lib/functions.php ] ;  alors
+    chmod 755 " $TMP_DIR " /opt/ethos/lib/functions.php
+  Fi
+  sudo chown -R root.root " $TMP_DIR " /opt/ethos/
+  sudo chown -R ethos.ethos " $TMP_DIR " /opt/ethos/etc/screenrc. *  " $TMP_DIR /opt/ethos/bin/minestop "
+
+  echo  " Vérifier les dépendances "
+  if [ " $DÉPEND " ] ;  alors
+    echo  " Installation des dépendances "
+    mkdir " $TMP_DIR /dépend "
+    pour  l'URL  dans  " ${DEPENDS[@]} "  ;  faire
+      wget " $URL " -P dépend
+      dormir 5
+    fait
+    f.CHECKDPKG
+    sudo dpkg --configure -a
+    f.CHECKDPKG
+    sudo dpkg -i " $TMP_DIR " /dépend/ * .deb
+  Fi
+  
+  si [ " $HOOK_PREP_ETHOS " ] ;  puis  $HOOK_PREP_ETHOS  ;  Fi
+  
+  echo  " fichiers ethOS prêts "
+}
+
+# Rassemblez les fichiers ethOS de stock dans des packages d'opt/temporaires et installez les packages de stock
+f.REVERT (){
+  if [ " ${VER // . / } "  -lt 132 ] ;  alors
+    echo  " Impossible de revenir en arrière, les fichiers de stock ne sont pas prêts pour votre version de mineur. Veuillez essayer \` sudo ethos-update reupdate \` "
+    sortie 16
+  Fi
+  si  ! git clone https://github.com/cynixx3/third-party-miner-installer-for-ethos.git -b ethos ;  alors
+    echo  " Échec du téléchargement du clone git. Veuillez vérifier votre pare-feu ou votre accès git et réessayer. "
+    sortie 17
+  Fi 
+  mkdir -p " $REP_TMP /opt/ethos "
+  rsync -a --delete " $TMP_DIR /third-party-miner-installer-for-ethos/opt/ethos- $VER / "  " $TMP_DIR /opt/ethos "
+  chmod 775 " $TMP_DIR " /opt/ethos/bin/ *  " $TMP_DIR " /opt/ethos/sbin/ * 
+  if [ -f  " $TMP_DIR " /opt/ethos/lib/minerprocess.php ] ;  alors
+    chmod 644 " $TMP_DIR " /opt/ethos/lib/minerprocess.php
+  Fi
+  if [ -f   " $TMP_DIR " /opt/ethos/lib/functions.php ] ;  alors
+    chmod 755 " $TMP_DIR " /opt/ethos/lib/functions.php
+  Fi
+  sudo chown -R root.root " $TMP_DIR " /opt/ethos/
+  sudo chown -R ethos.ethos " $TMP_DIR " /opt/ethos/bin/minestop
+# Réinstaller les dépendances de stock
+  mkdir " $TMP_DIR /dépend "
+  wget http://security.ubuntu.com/ubuntu/pool/main/g/gcc-4.8/gcc-4.8-base_4.8.4-2ubuntu1~14.04.4_amd64.deb -P dépend
+  wget https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test/+build/14981774/+files/gcc-8-base_8.1.0-5ubuntu1~14.04_amd64.deb -P dépend
+  f.CHECKDPKG
+  sudo dpkg --configure -a
+  f.CHECKDPKG
+  sudo dpkg -i " $TMP_DIR " /dépend/ * .deb
+  
+  si [ " $HOOK_REVERT " ] ;  puis  $HOOK_REVERT  ; Fi
+}
+
+f.INSTALLER (){
+  echo  " Arrêt du mineur "
+  /opt/ethos/bin/disallow
+  MPID= " $( ps uax | grep -E " avermore|ccminer|cgminer-skein|claymore|dstm-zcash|ethminer|ewbf-equihash|ewbf-zcash|lolminer|nevermore|optiminer-zcash|progpowminer|sgminer-gm| teamredminer|xmr-stak|xtl-stak| $MINER_BRANCH "  | grep -Ev ' (bash|source|curl|update-miner|miner-manager|develop|grep) '  | awk ' {print $2} '  ) "
+  si [ " $MPID " ] ;  puis sudo kill -9 $MPID  ;  Fi
+  
+  echo  " Installation du mineur "
+  sudo rsync -av " $TMP_DIR /opt/ " /opt
+  if [ -f  " $TMP_DIR /home/ethos/ $MINER_BRANCH .stub.conf " ] ;  alors
+    sudo rsync -av " $TMP_DIR /home/ethos/ " /home/ethos
+    si [ " $HOOK_STUB " ] ;  puis  $HOOK_STUB  ;  Fi
+  Fi
+  if [[ " $ACTION "  ==  " install " ]] && [[ -d  " $TMP_DIR /opt/ethos " ]] ;  alors
+    sed " /#Installed/d " -i /home/ethos/remote.conf
+    printf  " \n#Fichiers ethOS $MINER_BRANCH installés sur %s "  " $( date ) "  >> /home/ethos/remote.conf
+  elif [[ " $ACTION "  ==  " revert " ]] && [[ -d  " $TMP_DIR /opt/ethos " ]] ;  alors
+    sed " /#Installed/d " -i /home/ethos/remote.conf
+  Fi
+
+  si [ " $HOOK_INSTALL " ] ;  puis  ${HOOK_INSTALL[@]}  ;  Fi
+
+  echo  " Redémarrage des services et du mineur "
+  redémarrage du service sudo ethos-miner-daemon
+  redémarrage du service sudo ethos-stats-daemon
+  redémarrage du service sudo ethos-gpu-stats-daemon
+  si [ " $ AUTORISER "  =  " 1 " ] ;  alors 
+    /opt/ethos/bin/autoriser
+  Fi
+}
+
+f.NETTOYAGE (){
+  rm -rf " $REP_TMP "
+  echo  " fichiers temporaires supprimés, tout est fait. "
+}
+
+f.AIDE (){
+  echo  " $1
+Usage $CMD [ Miner ] ( installer | mettre à jour | rétablir )
+Mineurs disponibles : "
+printf  " %s\n "  " ${AVAILABLE_MINERS[@] // \" / } "
+}
+mapfile -t AVAILABLE_MINERS <  <( curl $GIT_LOGIN -ks https://api.github.com/repos/cynixx3/third-party-miner-installer-for-ethos/branches ? per_page=100 | grep name | grep -Ev ' (ethos|maître) '  | sed -E ' s/ +"name": ("[a-z0-9\-]+?"), ?/ \1/g ' )
+
+# TODO ajouter la journalisation
+si [ " $# "  -lt  " 2 "  -o  " $# "  -gt  " 3 " ] ; alors
+  f.HELP " Mauvais nombre d'arguments, doit avoir 2 arguments, un mineur et une action, veuillez vous référer à https://github.com/cynixx3/third-party-miner-installer-for-ethos "
+  sortie 1
+elif  ! [[ " ${AVAILABLE_MINERS[@]} "  ==  * " \" $MINER_BRANCH \" " * ]] ;  alors
+  f.HELP " Mineur invalide sélectionné, veuillez choisir dans la liste ci-dessous "
+  sortie 2
+Fi
+
+# Obtenir les paramètres du mineur
+si  !  source  <( curl $GIT_LOGIN -s " https://raw.githubusercontent.com/cynixx3/third-party-miner-installer-for-ethos/ $MINER_BRANCH /miner.settings " )  ;  alors 
+  echo  " Vous avez peut-être un problème de certificat de sécurité. "
+Fi
+
+si [ -d  " $REP_TMP " ] ;  puis rm -rf " $TMP_DIR "  ;  Fi
+echo  " Déplacer vers un espace de travail temporaire "
+mkdir " $REP_TMP "
+cd  " $TMP_DIR "  ||  sortie 10
+VER= $( grep -oE " [0-9]+\.[0-9]+\.[0-9]+ " /opt/ethos/etc/version )
+
+cas  " 2 $ "  dans
+  installer)
+    f.PREPMINER
+    f. PREPÉTHOS
+    f.INSTALLER
+    f.NETTOYAGE
+  ;;
+  mise à jour)
+    f.PREPMINER
+    f.INSTALLER
+    f.NETTOYAGE
+  ;;
+  revenir)
+    f.REVERT
+    rm -rf " /opt/mineurs/ $MINER_BRANCH "
+    f.INSTALLER
+    f.NETTOYAGE
+  ;;
+  * )
+    f.HELP " Instruction non valide, les options sont install, update ou revert "
+    exit 3
+esac
+cd ~ || exit 20
